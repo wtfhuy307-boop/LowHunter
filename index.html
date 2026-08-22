@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    >
+
+    <title>LowHunter - Hair Physics</title>
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: rgb(18, 18, 22);
+        }
+
+        body {
+            touch-action: none;
+        }
+
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+    </style>
+</head>
+
+<body>
+
+<canvas id="canvas"></canvas>
+
+<script>
+"use strict";
+
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+
+// ============================
+// НАСТРОЙКИ
+// ============================
+
+const BG_COLOR = "rgb(18, 18, 22)";
+const STRAND_COLOR = "rgb(170, 175, 190)";
+const TIP_COLOR = "rgb(245, 205, 110)";
+const MOUSE_DOT_COLOR = "rgb(235, 235, 235)";
+
+const GRAVITY = 0.4;
+const FRICTION = 0.98;
+const MOUSE_RADIUS = 130;
+const CONSTRAINT_ITERATIONS = 4;
+
+const STRAND_COUNT = 70;
+
+
+// ============================
+// РАЗМЕР ЭКРАНА
+// ============================
+
+function resizeCanvas() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+    canvas.width = window.innerWidth * dpr;
+    canvas.height = window.innerHeight * dpr;
+
+    canvas.style.width = window.innerWidth + "px";
+    canvas.style.height = window.innerHeight + "px";
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+window.addEventListener("resize", resizeCanvas);
+
+resizeCanvas();
+
+
+// ============================
+// ВЕКТОР
+// ============================
+
+class Vector {
+
+    constructor(x = 0, y = 0) {
+        this.x = x;
+        this.y = y;
+    }
+
+    static sub(a, b) {
+        return new Vector(
+            a.x - b.x,
+            a.y - b.y
+        );
+    }
+
+    add(vector) {
+        this.x += vector.x;
+        this.y += vector.y;
+
+        return this;
+    }
+
+    mult(value) {
+        this.x *= value;
+        this.y *= value;
+
+        return this;
+    }
+
+    setXY(x, y) {
+        this.x = x;
+        this.y = y;
+    }
+}
+
+
+// ============================
+// ТОЧКА
+// ============================
+
+class Point {
+
+    constructor(x, y, pinned = false) {
+
+        this.pos = new Vector(x, y);
+
+        this.oldPos = new Vector(x, y);
+
+        this.pinned = pinned;
+    }
+
+
+    update(target) {
+
+        if (this.pinned) {
+            return;
+        }
+
+
+        // Verlet velocity
+
+        const velocity = Vector.sub(
+            this.pos,
+            this.oldPos
+        );
+
+
+        this.oldPos.setXY(
+            this.pos.x,
+            this.pos.y
+        );
+
+
+        velocity.mult(FRICTION);
+
+
+        // Гравитация
+
+        velocity.add(
+            new Vector(0, GRAVITY)
+        );
+
+
+        // Расстояние до пальца / мыши
+
+        const dx = target.x - this.pos.x;
+        const dy = target.y - this.pos.y;
+
+        let distance = Math.hypot(dx, dy);
+
+
+        if (distance < 0.0001) {
+            distance = 0.0001;
+        }
+
+
+        const direction = new Vector(
+            dx / distance,
+            dy / distance
+        );
+
+
+        // Сила воздействия
+
+        const force = Math.max(
+            (MOUSE_RADIUS - distance) / MOUSE_RADIUS,
+            0
+        );
+
+
+        // Движение
+
+        this.pos.add(velocity);
+
+
+        if (force > 0) {
+
+            this.pos.add(
+                direction.mult(force * 3)
+            );
+        }
+    }
+}
+
+
+// ============================
+// ПРЯДЬ
+// ============================
+
+class Strand {
+
+    constructor(
+        x,
+        y,
+        numPoints,
+        segmentLength
+    ) {
+
+        this.segmentLength = segmentLength;
+
+        this.points = [];
+
+
+        for (let i = 0; i < numPoints; i++) {
+
+            this.points.push(
+                new Point(
+                    x,
+                    y + i * segmentLength,
+                    i === 0
+                )
+            );
+        }
+    }
+
+
+    constrain() {
+
+        for (
+            let i = 0;
+            i < this.points.length - 1;
+            i++
+        ) {
+
+            const p1 = this.points[i];
+            const p2 = this.points[i + 1];
+
+
+            const dx = p2.pos.x - p1.pos.x;
+            const dy = p2.pos.y - p1.pos.y;
+
+
+            let distance = Math.hypot(
+                dx,
+                dy
+            );
+
+
+            if (distance < 0.0001) {
+                distance = 0.0001;
+            }
+
+
+            const difference =
+                (distance - this.segmentLength) /
+                distance;
+
+
+            const offsetX =
+                dx * 0.5 * difference;
+
+            const offsetY =
+                dy * 0.5 * difference;
+
+
+            if (!p1.pinned) {
+
+                p1.pos.x += offsetX;
+                p1.pos.y += offsetY;
+            }
+
+
+            if (!p2.pinned) {
+
+                p2.pos.x -= offsetX;
+                p2.pos.y -= offsetY;
+            }
+        }
+    }
+
+
+    update(target) {
+
+        for (const point of this.points) {
+
+            point.update(target);
+        }
+
+
+        for (
+            let i = 0;
+            i < CONSTRAINT_ITERATIONS;
+            i++
+        ) {
+
+            this.constrain();
+        }
+    }
+
+
+    draw() {
+
+        if (this.points.length < 2) {
+            return;
+        }
+
+
+        ctx.beginPath();
+
+
+        ctx.moveTo(
+            this.points[0].pos.x,
+            this.points[0].pos.y
+        );
+
+
+        for (
+            let i = 1;
+            i < this.points.length;
+            i++
+        ) {
+
+            ctx.lineTo(
+                this.points[i].pos.x,
+                this.points[i].pos.y
+            );
+        }
+
+
+        ctx.strokeStyle = STRAND_COLOR;
+        ctx.lineWidth = 1;
+
+        ctx.stroke();
+
+
+        // Кончик
+
+        const tip =
+            this.points[this.points.length - 1].pos;
+
+
+        ctx.beginPath();
+
+        ctx.arc(
+            tip.x,
+            tip.y,
+            3,
+            0,
+            Math.PI * 2
+        );
+
+        ctx.fillStyle = TIP_COLOR;
+
+        ctx.fill();
+    }
+}
+
+
+// ============================
+// СОЗДАНИЕ ПРЯДЕЙ
+// ============================
+
+let strands = [];
+
+
+function createStrands() {
+
+    strands = [];
+
+
+    const width = window.innerWidth;
+
+
+    for (
+        let i = 0;
+        i < STRAND_COUNT;
+        i++
+    ) {
+
+        const x =
+            40 +
+            Math.random() *
+            Math.max(1, width - 80);
+
+
+        const numPoints =
+            14 +
+            Math.floor(
+                Math.random() * 9
+            );
+
+
+        strands.push(
+            new Strand(
+                x,
+                0,
+                numPoints,
+                14
+            )
+        );
+    }
+}
+
+
+createStrands();
+
+
+// ============================
+// МЫШЬ / ПАЛЕЦ
+// ============================
+
+const pointer = {
+
+    x: window.innerWidth / 2,
+    y: window.innerHeight / 2,
+
+    active: false
+};
+
+
+// Компьютер
+
+window.addEventListener(
+    "mousemove",
+    event => {
+
+        pointer.x = event.clientX;
+        pointer.y = event.clientY;
+
+        pointer.active = true;
+    }
+);
+
+
+// Телефон
+
+window.addEventListener(
+    "touchstart",
+    event => {
+
+        if (event.touches.length > 0) {
+
+            pointer.x =
+                event.touches[0].clientX;
+
+            pointer.y =
+                event.touches[0].clientY;
+
+            pointer.active = true;
+        }
+    },
+    { passive: false }
+);
+
+
+window.addEventListener(
+    "touchmove",
+    event => {
+
+        event.preventDefault();
+
+        if (event.touches.length > 0) {
+
+            pointer.x =
+                event.touches[0].clientX;
+
+            pointer.y =
+                event.touches[0].clientY;
+
+            pointer.active = true;
+        }
+    },
+    { passive: false }
+);
+
+
+window.addEventListener(
+    "touchend",
+    () => {
+
+        pointer.active = false;
+    }
+);
+
+
+// ============================
+// АНИМАЦИЯ
+// ============================
+
+function animate() {
+
+    requestAnimationFrame(animate);
+
+
+    // Фон
+
+    ctx.fillStyle = BG_COLOR;
+
+    ctx.fillRect(
+        0,
+        0,
+        window.innerWidth,
+        window.innerHeight
+    );
+
+
+    // Физика
+
+    for (const strand of strands) {
+
+        strand.update(pointer);
+
+        strand.draw();
+    }
+
+
+    // Курсор
+
+    if (pointer.active) {
+
+        ctx.beginPath();
+
+        ctx.arc(
+            pointer.x,
+            pointer.y,
+            6,
+            0,
+            Math.PI * 2
+        );
+
+        ctx.fillStyle =
+            MOUSE_DOT_COLOR;
+
+        ctx.fill();
+    }
+}
+
+
+animate();
+
+
+// ============================
+// ПЕРЕСОЗДАНИЕ ПРИ RESIZE
+// ============================
+
+window.addEventListener(
+    "resize",
+    () => {
+
+        createStrands();
+    }
+);
+
+</script>
+
+</body>
+</html>
